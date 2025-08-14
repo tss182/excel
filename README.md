@@ -1,228 +1,372 @@
-package excel
+# Excel Package for Go
+
+A simple and powerful Go package for reading and creating Excel files, built on top of the excellent [excelize](https://github.com/xuri/excelize) library. This package provides a clean, easy-to-use interface for common Excel operations.
+
+## Features
+
+- ✅ Create new Excel files
+- ✅ Read existing Excel files
+- ✅ Multiple worksheet support
+- ✅ Cell-level operations (read/write)
+- ✅ Row-level operations (read/write)
+- ✅ Bulk data operations
+- ✅ Header management
+- ✅ Auto-filtering
+- ✅ Column width adjustment
+- ✅ Cell styling and formatting
+- ✅ Convert data to maps for easy access
+- ✅ Simple table creation
+- ✅ Comprehensive error handling
+
+## Installation
+
+```bash
+go mod init your-project-name
+go get github.com/xuri/excelize/v2
+```
+
+Then copy the `excel` package to your project.
+
+## Quick Start
+
+### Creating a New Excel File
+
+```go
+package main
 
 import (
-	"github.com/xuri/excelize/v2"
-	"os"
-	"testing"
+    "fmt"
+    "your-module/excel" // Replace with your actual module path
 )
 
-func TestNewExcelFile(t *testing.T) {
-	f := NewExcelFile()
-	if f == nil {
-		t.Fatal("NewExcelFile returned nil")
-	}
-	if f.file == nil {
-		t.Fatal("Excel file is nil")
-	}
+func main() {
+    // Create new Excel file
+    ef := excel.NewExcelFile()
+    defer ef.Close()
+    
+    // Set some data
+    ef.SetCellValue("Sheet1", 1, 1, "Hello")
+    ef.SetCellValue("Sheet1", 1, 2, "World")
+    
+    // Save the file
+    err := ef.SaveAs("hello.xlsx")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+    }
 }
+```
 
-func TestFileOperations(t *testing.T) {
-	f := NewExcelFile()
-	defer f.Close()
+### Reading an Excel File
 
-	// Test creating and deleting sheets
-	t.Run("Sheet Operations", func(t *testing.T) {
-		err := f.CreateSheet("TestSheet")
-		if err != nil {
-			t.Errorf("Failed to create sheet: %v", err)
-		}
+```go
+package main
 
-		sheets := f.GetSheetList()
-		found := false
-		for _, sheet := range sheets {
-			if sheet == "TestSheet" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("Created sheet not found in sheet list")
-		}
+import (
+    "fmt"
+    "your-module/excel"
+)
 
-		err = f.SetActiveSheet("TestSheet")
-		if err != nil {
-			t.Errorf("Failed to set active sheet: %v", err)
-		}
-
-		err = f.DeleteSheet("TestSheet")
-		if err != nil {
-			t.Errorf("Failed to delete sheet: %v", err)
-		}
-	})
-
-	// Test cell operations
-	t.Run("Cell Operations", func(t *testing.T) {
-		sheet := "Sheet1"
-		err := f.SetCellValue(sheet, 1, 1, "Test")
-		if err != nil {
-			t.Errorf("Failed to set cell value: %v", err)
-		}
-
-		value, err := f.GetCellValue(sheet, 1, 1)
-		if err != nil {
-			t.Errorf("Failed to get cell value: %v", err)
-		}
-		if value != "Test" {
-			t.Errorf("Expected cell value 'Test', got '%s'", value)
-		}
-	})
-
-	// Test row operations
-	t.Run("Row Operations", func(t *testing.T) {
-		sheet := "Sheet1"
-		values := []interface{}{"Col1", "Col2", "Col3"}
-		err := f.SetRowValues(sheet, 2, values)
-		if err != nil {
-			t.Errorf("Failed to set row values: %v", err)
-		}
-
-		rowValues, err := f.GetRowValues(sheet, 2)
-		if err != nil {
-			t.Errorf("Failed to get row values: %v", err)
-		}
-		if len(rowValues) != len(values) {
-			t.Errorf("Expected %d values, got %d", len(values), len(rowValues))
-		}
-	})
-
-	// Test headers
-	t.Run("Header Operations", func(t *testing.T) {
-		sheet := "Sheet1"
-		headers := []string{"Header1", "Header2", "Header3"}
-		err := f.SetHeaders(sheet, headers)
-		if err != nil {
-			t.Errorf("Failed to set headers: %v", err)
-		}
-
-		readHeaders, err := f.GetHeaders(sheet)
-		if err != nil {
-			t.Errorf("Failed to get headers: %v", err)
-		}
-		if len(readHeaders) != len(headers) {
-			t.Errorf("Expected %d headers, got %d", len(headers), len(readHeaders))
-		}
-	})
-
-	// Test data operations
-	t.Run("Data Operations", func(t *testing.T) {
-		sheet := "Sheet1"
-		data := [][]interface{}{
-			{"A1", "B1", "C1"},
-			{"A2", "B2", "C2"},
-		}
-		err := f.WriteData(sheet, 3, data)
-		if err != nil {
-			t.Errorf("Failed to write data: %v", err)
-		}
-
-		readData, err := f.ReadData(sheet)
-		if err != nil {
-			t.Errorf("Failed to read data: %v", err)
-		}
-		if len(readData) < len(data) {
-			t.Errorf("Expected at least %d rows, got %d", len(data), len(readData))
-		}
-	})
+func main() {
+    // Open existing file
+    ef, err := excel.OpenExcelFile("data.xlsx")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    defer ef.Close()
+    
+    // Read cell value
+    value, err := ef.GetCellValue("Sheet1", 1, 1)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    fmt.Printf("Cell A1: %s\n", value)
+    
+    // Read all data
+    data, err := ef.ReadData("Sheet1")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    for i, row := range data {
+        fmt.Printf("Row %d: %v\n", i+1, row)
+    }
 }
+```
 
-func TestFileIO(t *testing.T) {
-	// Test saving and opening files
-	t.Run("File IO Operations", func(t *testing.T) {
-		f := NewExcelFile()
-		defer f.Close()
+### Creating a Simple Table
 
-		// Add some test data
-		err := f.SetCellValue("Sheet1", 1, 1, "Test Data")
-		if err != nil {
-			t.Errorf("Failed to set cell value: %v", err)
-		}
+```go
+package main
 
-		// Save the file
-		tempFile := "test_excel.xlsx"
-		err = f.SaveAs(tempFile)
-		if err != nil {
-			t.Errorf("Failed to save file: %v", err)
-		}
+import (
+    "fmt"
+    "your-module/excel"
+)
 
-		// Open the saved file
-		f2, err := OpenExcelFile(tempFile)
-		if err != nil {
-			t.Errorf("Failed to open file: %v", err)
-		}
-		defer f2.Close()
-
-		// Verify the data
-		value, err := f2.GetCellValue("Sheet1", 1, 1)
-		if err != nil {
-			t.Errorf("Failed to get cell value from opened file: %v", err)
-		}
-		if value != "Test Data" {
-			t.Errorf("Expected 'Test Data', got '%s'", value)
-		}
-
-		// Clean up
-		os.Remove(tempFile)
-	})
+func main() {
+    ef := excel.NewExcelFile()
+    defer ef.Close()
+    
+    // Define headers and data
+    headers := []string{"Name", "Age", "City", "Salary"}
+    data := [][]interface{}{
+        {"John Doe", 30, "New York", 75000},
+        {"Jane Smith", 25, "Los Angeles", 65000},
+        {"Bob Johnson", 35, "Chicago", 80000},
+        {"Alice Brown", 28, "Boston", 70000},
+    }
+    
+    // Create table with auto-sizing
+    err := ef.CreateSimpleTable("Employees", headers, data)
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    // Add auto-filter
+    err = ef.AutoFilter("Employees", 1, 1, len(data)+1, len(headers))
+    if err != nil {
+        fmt.Printf("Error adding filter: %v\n", err)
+        return
+    }
+    
+    // Save file
+    err = ef.SaveAs("employees.xlsx")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+    }
 }
+```
 
-func TestUtilityFunctions(t *testing.T) {
-	f := NewExcelFile()
-	defer f.Close()
+### Converting Data to Maps
 
-	// Test CreateSimpleTable
-	t.Run("Create Simple Table", func(t *testing.T) {
-		headers := []string{"Name", "Age", "City"}
-		data := [][]interface{}{
-			{"John", 30, "New York"},
-			{"Alice", 25, "London"},
-		}
+```go
+package main
 
-		err := f.CreateSimpleTable("Sheet1", headers, data)
-		if err != nil {
-			t.Errorf("Failed to create simple table: %v", err)
-		}
+import (
+    "fmt"
+    "your-module/excel"
+)
 
-		// Verify headers
-		readHeaders, err := f.GetHeaders("Sheet1")
-		if err != nil {
-			t.Errorf("Failed to read headers: %v", err)
-		}
-		if len(readHeaders) != len(headers) {
-			t.Errorf("Expected %d headers, got %d", len(headers), len(readHeaders))
-		}
-	})
-
-	// Test ConvertToMap
-	t.Run("Convert To Map", func(t *testing.T) {
-		result, err := f.ConvertToMap("Sheet1")
-		if err != nil {
-			t.Errorf("Failed to convert to map: %v", err)
-		}
-		if len(result) != 2 {
-			t.Errorf("Expected 2 rows in map, got %d", len(result))
-		}
-	})
+func main() {
+    ef, err := excel.OpenExcelFile("employees.xlsx")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    defer ef.Close()
+    
+    // Convert to slice of maps for easy access
+    employees, err := ef.ConvertToMap("Employees")
+    if err != nil {
+        fmt.Printf("Error: %v\n", err)
+        return
+    }
+    
+    // Print employee information
+    for i, emp := range employees {
+        fmt.Printf("Employee %d:\n", i+1)
+        fmt.Printf("  Name: %s\n", emp["Name"])
+        fmt.Printf("  Age: %s\n", emp["Age"])
+        fmt.Printf("  City: %s\n", emp["City"])
+        fmt.Printf("  Salary: %s\n", emp["Salary"])
+        fmt.Println()
+    }
 }
+```
 
-func TestStyleOperations(t *testing.T) {
-	f := NewExcelFile()
-	defer f.Close()
+## API Reference
 
-	t.Run("Style Operations", func(t *testing.T) {
-		style := &excelize.Style{
-			Font: &excelize.Font{
-				Bold: true,
-			},
-		}
+### File Operations
 
-		styleID, err := f.CreateStyle(style)
-		if err != nil {
-			t.Errorf("Failed to create style: %v", err)
-		}
+| Method | Description |
+|--------|-------------|
+| `NewExcelFile()` | Create a new Excel file |
+| `OpenExcelFile(filename)` | Open an existing Excel file |
+| `SaveAs(filename)` | Save file with specified name |
+| `Save()` | Save file (for existing files) |
+| `Close()` | Close the file |
 
-		err = f.SetCellStyle("Sheet1", 1, 1, styleID)
-		if err != nil {
-			t.Errorf("Failed to set cell style: %v", err)
-		}
-	})
+### Sheet Operations
+
+| Method | Description |
+|--------|-------------|
+| `CreateSheet(name)` | Create a new worksheet |
+| `DeleteSheet(name)` | Delete a worksheet |
+| `GetSheetList()` | Get all sheet names |
+| `SetActiveSheet(name)` | Set active sheet |
+
+### Cell Operations
+
+| Method | Description |
+|--------|-------------|
+| `SetCellValue(sheet, row, col, value)` | Set single cell value |
+| `GetCellValue(sheet, row, col)` | Get single cell value |
+| `SetCellStyle(sheet, row, col, styleID)` | Apply style to cell |
+
+### Row Operations
+
+| Method | Description |
+|--------|-------------|
+| `SetRowValues(sheet, row, values)` | Set entire row values |
+| `GetRowValues(sheet, row)` | Get entire row values |
+| `SetHeaders(sheet, headers)` | Set header row (row 1) |
+| `GetHeaders(sheet)` | Get header row |
+
+### Bulk Operations
+
+| Method | Description |
+|--------|-------------|
+| `WriteData(sheet, startRow, data)` | Write multiple rows |
+| `ReadData(sheet)` | Read all data from sheet |
+| `ReadDataWithHeaders(sheet)` | Read data with headers separated |
+| `ConvertToMap(sheet)` | Convert sheet to slice of maps |
+
+### Utility Operations
+
+| Method | Description |
+|--------|-------------|
+| `CreateSimpleTable(sheet, headers, data)` | Create formatted table |
+| `AutoFilter(sheet, startRow, startCol, endRow, endCol)` | Add auto-filter |
+| `SetColumnWidth(sheet, col, width)` | Set column width |
+| `CreateStyle(style)` | Create new style, returns style ID |
+
+## Advanced Usage
+
+### Cell Formatting
+
+```go
+package main
+
+import (
+    "your-module/excel"
+    "github.com/xuri/excelize/v2"
+)
+
+func main() {
+    ef := excel.NewExcelFile()
+    defer ef.Close()
+    
+    // Create a style for headers
+    headerStyle := &excelize.Style{
+        Font: &excelize.Font{
+            Bold: true,
+            Size: 12,
+        },
+        Fill: excelize.Fill{
+            Type:    "pattern",
+            Color:   []string{"#4472C4"},
+            Pattern: 1,
+        },
+        Alignment: &excelize.Alignment{
+            Horizontal: "center",
+            Vertical:   "center",
+        },
+    }
+    
+    // Create the style
+    styleID, err := ef.CreateStyle(headerStyle)
+    if err != nil {
+        // handle error
+        return
+    }
+    
+    // Set header values
+    headers := []string{"Product", "Price", "Stock"}
+    ef.SetHeaders("Sheet1", headers)
+    
+    // Apply style to header row
+    for i := range headers {
+        ef.SetCellStyle("Sheet1", 1, i+1, styleID)
+    }
+    
+    ef.SaveAs("styled.xlsx")
 }
+```
+
+### Working with Multiple Sheets
+
+```go
+package main
+
+import (
+    "your-module/excel"
+)
+
+func main() {
+    ef := excel.NewExcelFile()
+    defer ef.Close()
+    
+    // Create multiple sheets
+    sheets := []string{"Sales", "Inventory", "Customers"}
+    for _, sheet := range sheets {
+        ef.CreateSheet(sheet)
+    }
+    
+    // Add data to different sheets
+    salesData := [][]interface{}{
+        {"Product A", 1000, 50},
+        {"Product B", 1500, 30},
+    }
+    ef.WriteData("Sales", 1, salesData)
+    
+    inventoryData := [][]interface{}{
+        {"Product A", 100},
+        {"Product B", 75},
+    }
+    ef.WriteData("Inventory", 1, inventoryData)
+    
+    // List all sheets
+    sheetList := ef.GetSheetList()
+    fmt.Printf("Sheets: %v\n", sheetList)
+    
+    ef.SaveAs("multi_sheet.xlsx")
+}
+```
+
+## Error Handling
+
+The package follows Go's idiomatic error handling patterns. Always check for errors:
+
+```go
+ef, err := excel.OpenExcelFile("data.xlsx")
+if err != nil {
+    log.Fatalf("Failed to open file: %v", err)
+}
+defer ef.Close()
+
+err = ef.SetCellValue("Sheet1", 1, 1, "Hello")
+if err != nil {
+    log.Printf("Failed to set cell value: %v", err)
+}
+```
+
+## Requirements
+
+- Go 1.16 or later
+- github.com/xuri/excelize/v2
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Built on top of the excellent [excelize](https://github.com/xuri/excelize) library
+- Inspired by the need for a simpler Excel manipulation API in Go
+
+## Support
+
+If you encounter any issues or have questions, please open an issue on GitHub.
