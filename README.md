@@ -22,7 +22,7 @@ A simple and powerful Go package for reading and creating Excel files, built on 
 
 ```bash
 go mod init your-project-name
-go get github.com/xuri/excelize/v2
+go get github.com/tss182/excel
 ```
 
 Then copy the `excel` package to your project.
@@ -36,7 +36,7 @@ package main
 
 import (
     "fmt"
-    "your-module/excel" // Replace with your actual module path
+    "github.com/tss182/excel" // Replace with your actual module path
 )
 
 func main() {
@@ -63,7 +63,7 @@ package main
 
 import (
     "fmt"
-    "your-module/excel"
+    "github.com/tss182/excel"
 )
 
 func main() {
@@ -104,7 +104,7 @@ package main
 
 import (
     "fmt"
-    "your-module/excel"
+    "github.com/tss182/excel"
 )
 
 func main() {
@@ -149,7 +149,7 @@ package main
 
 import (
     "fmt"
-    "your-module/excel"
+    "github.com/tss182/excel"
 )
 
 func main() {
@@ -243,8 +243,7 @@ func main() {
 package main
 
 import (
-    "your-module/excel"
-    "github.com/xuri/excelize/v2"
+    "github.com/tss182/excel"
 )
 
 func main() {
@@ -252,17 +251,17 @@ func main() {
     defer ef.Close()
     
     // Create a style for headers
-    headerStyle := &excelize.Style{
-        Font: &excelize.Font{
+    headerStyle := &excel.Style{
+        Font: &excel.Font{
             Bold: true,
             Size: 12,
         },
-        Fill: excelize.Fill{
+        Fill: excel.Fill{
             Type:    "pattern",
             Color:   []string{"#4472C4"},
             Pattern: 1,
         },
-        Alignment: &excelize.Alignment{
+        Alignment: &excel.Alignment{
             Horizontal: "center",
             Vertical:   "center",
         },
@@ -294,7 +293,7 @@ func main() {
 package main
 
 import (
-    "your-module/excel"
+    "github.com/tss182/excel"
 )
 
 func main() {

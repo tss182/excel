@@ -10,6 +10,25 @@ type File struct {
 	file *excelize.File
 }
 
+type (
+	Alignment  excelize.Alignment
+	Border     excelize.Border
+	Font       excelize.Font
+	Fill       excelize.Fill
+	Protection excelize.Protection
+	Style      struct {
+		Border        []Border
+		Fill          Fill
+		Font          *Font
+		Alignment     *Alignment
+		Protection    *Protection
+		NumFmt        int
+		DecimalPlaces *int
+		CustomNumFmt  *string
+		NegRed        bool
+	}
+)
+
 // CellData represents data for a single cell
 type CellData struct {
 	Row   int
@@ -185,8 +204,24 @@ func (f *File) SetCellStyle(sheet string, row, col int, styleID int) error {
 }
 
 // CreateStyle creates a new style and returns its ID
-func (f *File) CreateStyle(style *excelize.Style) (int, error) {
-	styleID, err := f.file.NewStyle(style)
+func (f *File) CreateStyle(style *Style) (int, error) {
+	var border = make([]excelize.Border, len(style.Border))
+	for _, b := range style.Border {
+		border = append(border, (excelize.Border)(b))
+	}
+	exStyle := &excelize.Style{
+		Border:        border,
+		Fill:          (excelize.Fill)(style.Fill),
+		Font:          (*excelize.Font)(style.Font),
+		Alignment:     (*excelize.Alignment)(style.Alignment),
+		Protection:    (*excelize.Protection)(style.Protection),
+		NumFmt:        style.NumFmt,
+		DecimalPlaces: style.DecimalPlaces,
+		CustomNumFmt:  style.CustomNumFmt,
+		NegRed:        style.NegRed,
+	}
+
+	styleID, err := f.file.NewStyle(exStyle)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create style: %w", err)
 	}

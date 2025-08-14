@@ -1,7 +1,6 @@
 package excel
 
 import (
-	"github.com/xuri/excelize/v2"
 	"os"
 	"testing"
 )
@@ -209,8 +208,8 @@ func TestStyleOperations(t *testing.T) {
 	defer f.Close()
 
 	t.Run("Style Operations", func(t *testing.T) {
-		style := &excelize.Style{
-			Font: &excelize.Font{
+		style := &Style{
+			Font: &Font{
 				Bold: true,
 			},
 		}
