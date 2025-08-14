@@ -41,7 +41,7 @@ import (
 
 func main() {
     // Create new Excel file
-    ef := excel.NewExcelFile()
+    ef := excel.New()
     defer ef.Close()
     
     // Set some data
@@ -68,7 +68,7 @@ import (
 
 func main() {
     // Open existing file
-    ef, err := excel.OpenExcelFile("data.xlsx")
+    ef, err := excel.Open("data.xlsx")
     if err != nil {
         fmt.Printf("Error: %v\n", err)
         return
@@ -108,7 +108,7 @@ import (
 )
 
 func main() {
-    ef := excel.NewExcelFile()
+    ef := excel.New()
     defer ef.Close()
     
     // Define headers and data
@@ -153,7 +153,7 @@ import (
 )
 
 func main() {
-    ef, err := excel.OpenExcelFile("employees.xlsx")
+    ef, err := excel.Open("employees.xlsx")
     if err != nil {
         fmt.Printf("Error: %v\n", err)
         return
@@ -183,13 +183,13 @@ func main() {
 
 ### File Operations
 
-| Method | Description |
-|--------|-------------|
-| `NewExcelFile()` | Create a new Excel file |
-| `OpenExcelFile(filename)` | Open an existing Excel file |
+| Method             | Description |
+|--------------------|-------------|
+| `New()`            | Create a new Excel file |
+| `Open(filename)`   | Open an existing Excel file |
 | `SaveAs(filename)` | Save file with specified name |
-| `Save()` | Save file (for existing files) |
-| `Close()` | Close the file |
+| `Save()`           | Save file (for existing files) |
+| `Close()`          | Close the file |
 
 ### Sheet Operations
 
@@ -247,7 +247,7 @@ import (
 )
 
 func main() {
-    ef := excel.NewExcelFile()
+    ef := excel.New()
     defer ef.Close()
     
     // Create a style for headers
@@ -297,7 +297,7 @@ import (
 )
 
 func main() {
-    ef := excel.NewExcelFile()
+    ef := excel.New()
     defer ef.Close()
     
     // Create multiple sheets
@@ -332,7 +332,7 @@ func main() {
 The package follows Go's idiomatic error handling patterns. Always check for errors:
 
 ```go
-ef, err := excel.OpenExcelFile("data.xlsx")
+ef, err := excel.Open("data.xlsx")
 if err != nil {
     log.Fatalf("Failed to open file: %v", err)
 }

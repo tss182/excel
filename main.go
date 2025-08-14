@@ -44,15 +44,15 @@ type RowData struct {
 	Sheet  string
 }
 
-// NewExcelFile creates a new Excel file
-func NewExcelFile() *File {
+// New creates a new Excel file
+func New() *File {
 	return &File{
 		file: excelize.NewFile(),
 	}
 }
 
-// OpenExcelFile opens an existing Excel file
-func OpenExcelFile(filename string) (*File, error) {
+// Open opens an existing Excel file
+func Open(filename string) (*File, error) {
 	file, err := excelize.OpenFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)

@@ -6,9 +6,9 @@ import (
 )
 
 func TestNewExcelFile(t *testing.T) {
-	f := NewExcelFile()
+	f := New()
 	if f == nil {
-		t.Fatal("NewExcelFile returned nil")
+		t.Fatal("New returned nil")
 	}
 	if f.file == nil {
 		t.Fatal("Excel file is nil")
@@ -16,7 +16,7 @@ func TestNewExcelFile(t *testing.T) {
 }
 
 func TestFileOperations(t *testing.T) {
-	f := NewExcelFile()
+	f := New()
 	defer f.Close()
 
 	// Test creating and deleting sheets
@@ -127,7 +127,7 @@ func TestFileOperations(t *testing.T) {
 func TestFileIO(t *testing.T) {
 	// Test saving and opening files
 	t.Run("File IO Operations", func(t *testing.T) {
-		f := NewExcelFile()
+		f := New()
 		defer f.Close()
 
 		// Add some test data
@@ -144,7 +144,7 @@ func TestFileIO(t *testing.T) {
 		}
 
 		// Open the saved file
-		f2, err := OpenExcelFile(tempFile)
+		f2, err := Open(tempFile)
 		if err != nil {
 			t.Errorf("Failed to open file: %v", err)
 		}
@@ -165,7 +165,7 @@ func TestFileIO(t *testing.T) {
 }
 
 func TestUtilityFunctions(t *testing.T) {
-	f := NewExcelFile()
+	f := New()
 	defer f.Close()
 
 	// Test CreateSimpleTable
@@ -204,7 +204,7 @@ func TestUtilityFunctions(t *testing.T) {
 }
 
 func TestStyleOperations(t *testing.T) {
-	f := NewExcelFile()
+	f := New()
 	defer f.Close()
 
 	t.Run("Style Operations", func(t *testing.T) {
