@@ -1,6 +1,6 @@
-module excel
+module github.com/tss182/excel
 
-go 1.24
+go 1.24.6
 
 require github.com/xuri/excelize/v2 v2.9.1
 

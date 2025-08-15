@@ -1,13 +1,17 @@
-package excel
+package old
 
 import (
 	"fmt"
+	"github.com/goccy/go-json"
 	"github.com/xuri/excelize/v2"
+	"strings"
+	"sync"
 )
 
 // File represents an Excel file wrapper
 type File struct {
-	file *excelize.File
+	file     *excelize.File
+	RowStart int
 }
 
 type (
@@ -147,29 +151,83 @@ func (f *File) SetHeaders(sheet string, headers []string) error {
 	return f.SetRowValues(sheet, 1, values)
 }
 
+func (f *File) getRowStart() int {
+	rowStart := f.RowStart
+	if rowStart <= 0 {
+		rowStart = 1
+	}
+	return rowStart
+}
+
 // GetHeaders gets header row (first row)
 func (f *File) GetHeaders(sheet string) ([]string, error) {
-	return f.GetRowValues(sheet, 1)
+	return f.GetRowValues(sheet, f.getRowStart())
 }
 
 // WriteData writes multiple rows of data starting from a specific row
 func (f *File) WriteData(sheet string, startRow int, data [][]interface{}) error {
+	// Pre-calculate the number of operations
+	totalOps := 0
+	for _, row := range data {
+		totalOps += len(row)
+	}
+
+	// Use a buffered channel for concurrent writes
+	errCh := make(chan error, totalOps)
+	var wg sync.WaitGroup
+
+	// Use worker pool for large datasets
+	const maxWorkers = 10
+	sem := make(chan struct{}, maxWorkers)
+
 	for i, row := range data {
-		err := f.SetRowValues(sheet, startRow+i, row)
+		wg.Add(1)
+		go func(rowNum int, values []interface{}) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
+			if err := f.SetRowValues(sheet, startRow+rowNum, values); err != nil {
+				errCh <- fmt.Errorf("row %d: %w", rowNum, err)
+			}
+		}(i, row)
+	}
+
+	// Wait for all operations to complete
+	wg.Wait()
+	close(errCh)
+
+	// Check for errors
+	for err := range errCh {
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
+
 }
 
 // ReadData reads all data from a sheet
 func (f *File) ReadData(sheet string) ([][]string, error) {
-	rows, err := f.file.GetRows(sheet)
+	// Use streaming API for large sheets
+	rows, err := f.file.Rows(sheet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data from sheet %s: %w", sheet, err)
 	}
-	return rows, nil
+	defer rows.Close()
+
+	var result [][]string
+	for rows.Next() {
+		row, err := rows.Columns()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read row: %w", err)
+		}
+		result = append(result, row)
+	}
+
+	return result, nil
+
 }
 
 // ReadDataWithHeaders reads data and returns headers separately
@@ -182,10 +240,11 @@ func (f *File) ReadDataWithHeaders(sheet string) (headers []string, data [][]str
 	if len(allData) == 0 {
 		return []string{}, [][]string{}, nil
 	}
+	rowStart := f.getRowStart()
 
-	headers = allData[0]
-	if len(allData) > 1 {
-		data = allData[1:]
+	headers = allData[rowStart-1]
+	if len(allData) > rowStart {
+		data = allData[rowStart:]
 	} else {
 		data = [][]string{}
 	}
@@ -282,13 +341,27 @@ func (f *File) getCellName(row, col int) string {
 
 // Helper function to get column name from column number
 func (f *File) getColumnName(col int) string {
-	var result string
+	// Pre-calculate common column names for 1-26
+	if col > 0 && col <= 26 {
+		return string(rune('A' + col - 1))
+	}
+
+	var result strings.Builder
+	result.Grow(3) // Most Excel columns are 1-3 characters
 	for col > 0 {
 		col--
-		result = string(rune('A'+col%26)) + result
+		result.WriteByte('A' + byte(col%26))
 		col /= 26
 	}
-	return result
+	return reverse(result.String())
+}
+
+func reverse(s string) string {
+	runes := []rune(s)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
 }
 
 // Utility functions for common operations
@@ -322,12 +395,12 @@ func (f *File) CreateSimpleTable(sheet string, headers []string, data [][]interf
 func (f *File) ConvertToMap(sheet string) ([]map[string]string, error) {
 	headers, data, err := f.ReadDataWithHeaders(sheet)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read sheet data: %w", err)
 	}
 
-	var result []map[string]string
+	result := make([]map[string]string, 0, len(data))
 	for _, row := range data {
-		rowMap := make(map[string]string)
+		rowMap := make(map[string]string, len(headers))
 		for i, header := range headers {
 			if i < len(row) {
 				rowMap[header] = row[i]
@@ -339,4 +412,19 @@ func (f *File) ConvertToMap(sheet string) ([]map[string]string, error) {
 	}
 
 	return result, nil
+}
+
+// Convert converts sheet data to a data
+func (f *File) Convert(sheet string, d interface{}) error {
+	result, err := f.ConvertToMap(sheet)
+	if err != nil {
+		return fmt.Errorf("failed to convert sheet to map: %w", err)
+	}
+
+	b, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+
+	return json.Unmarshal(b, d)
 }
