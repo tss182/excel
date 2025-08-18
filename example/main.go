@@ -1,11 +1,67 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/gofiber/fiber/v2"
+	"github.com/tss182/excel"
+)
+
+type (
+	Data struct {
+		ID      int    `excel:"ID,required" json:"id"`
+		Name    string `excel:"Name,required" json:"name"`
+		Phone   int    `excel:"Phone Number" json:"phone"`
+		Address string `excel:"Address" json:"address"`
+	}
+)
 
 func main() {
-	var a = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	var b = []int{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	app := fiber.New()
+	app.Post("/excel", func(c *fiber.Ctx) error {
+		f, err := c.FormFile("file")
+		if err != nil {
+			return fmt.Errorf("failed to get file: %w", err)
+		}
 
-	a = append(a, b...)
-	fmt.Println(c)
+		fileReader, err := f.Open()
+
+		fe, err := excel.OpenReader[Data](fileReader)
+		if err != nil {
+			return fmt.Errorf("failed to open reader: %w", err)
+		}
+
+		defer fe.Close()
+		var limit uint = 1000
+
+		var data = make([]Data, 0, limit)
+
+		err = fe.Read(&data, "Sheet1", excel.Opt{
+			HeaderRow:    1,
+			DataStartRow: 2,
+			Limit:        limit,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to read: %w", err)
+		}
+
+		defer fe.CloseRow()
+
+		if !fe.IsNext {
+			return c.JSON(data)
+		}
+		for {
+			var temp = make([]Data, 0, limit)
+			err = fe.Next(&temp)
+			if err != nil {
+				return fmt.Errorf("failed to read next: %w", err)
+			}
+			data = append(data, temp...)
+			if !fe.IsNext {
+				break
+			}
+		}
+		return c.JSON(nil)
+	})
+
+	app.Listen(":8888")
 }
