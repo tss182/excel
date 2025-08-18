@@ -38,10 +38,10 @@ func (e *Excel[T]) Close() error {
 	return e.file.Close()
 }
 
-func (e *Excel[T]) Read(out []T, sheetName string, opts ...Opt) error {
+func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 	var headerRow, dataStartRow uint8 = 1, 2
 	var limit uint = 0
-	if opts == nil {
+	if opts != nil {
 		for _, opt := range opts {
 			if opt.HeaderRow > 0 {
 				headerRow = opt.HeaderRow
@@ -118,15 +118,15 @@ func (e *Excel[T]) CloseRow() error {
 	return e.rows.Close()
 }
 
-func (e *Excel[T]) Next(out []T) error {
-	if e.NextRow {
+func (e *Excel[T]) Next(out *[]T) error {
+	if e.IsNext {
 		return e.getRows(out)
 	} else {
 		return errors.New("no next row")
 	}
 }
 
-func (e *Excel[T]) getRows(out []T) error {
+func (e *Excel[T]) getRows(out *[]T) error {
 	var numberData uint = 0
 	for e.rows.Next() {
 		numberData++
@@ -160,16 +160,16 @@ func (e *Excel[T]) getRows(out []T) error {
 				return fmt.Errorf("row %d col %s (%s): %w", rowNum, idxToCol(rule.colIdx), rule.header, err)
 			}
 		}
-		out = append(out, rv.Interface().(T))
-		if e.opt.Limit > 0 && rowNum >= e.opt.Limit {
+		*out = append(*out, rv.Interface().(T))
+		if e.opt.Limit > 0 && numberData >= e.opt.Limit {
 			break
 		}
 	}
 
 	if e.rows.Next() {
-		e.NextRow = true
+		e.IsNext = true
 	} else {
-		e.NextRow = false
+		e.IsNext = false
 	}
 
 	return e.rows.Error()
