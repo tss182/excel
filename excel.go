@@ -6,6 +6,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"mime/multipart"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,67 +129,100 @@ func (e *Excel[T]) Next(out *[]T) error {
 }
 
 func (e *Excel[T]) getRows(out *[]T) error {
+	// Pre-allocate output slice
+	initialCap := 1000
+	if e.opt.Limit > 0 && uint(initialCap) > e.opt.Limit {
+		initialCap = int(e.opt.Limit)
+	}
+	*out = make([]T, 0, initialCap)
+
+	// Initialize worker pool
+	workers := e.opt.Workers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+
+	// Create work channels
+	type workItem struct {
+		rule   fieldRule
+		value  string
+		rowNum uint
+		colIdx int
+	}
+
+	jobs := make(chan workItem, workers*2)
+	results := make(chan error, workers*2)
+
+	// Start worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				// Fast path processing
+				if job.rule.fastPath {
+					if _, err := job.rule.converter(job.value); err == nil {
+						results <- nil
+						continue
+					}
+				}
+
+				// Regular processing
+				if job.rule.required && job.value == "" {
+					results <- fmt.Errorf("row %d col %s (%s) is required",
+						job.rowNum, idxToCol(job.colIdx), job.rule.header)
+					continue
+				}
+
+				results <- nil
+			}
+		}()
+	}
+
+	// Process rows
 	var numberData uint = 0
+	buffer := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buffer)
+
 	for e.rows.Next() {
 		numberData++
 		rowNum := numberData + uint(e.opt.DataStartRow) - 1
+
+		// Get row data efficiently
 		cols, err := e.rows.Columns()
 		if err != nil {
 			return fmt.Errorf("read row %d: %w", rowNum, err)
 		}
 
-		// new instance of T
+		// Create new instance using cached type info
 		rv := reflect.New(e.rt).Elem()
 
-		// Create error channel with buffer equal to number of rules
-		errCh := make(chan error, len(e.rules))
-		wg := sync.WaitGroup{}
-
-		// Limit concurrent goroutines
-		semaphore := make(chan struct{}, 10) // limit to 10 concurrent goroutines
-
+		// Process fields
+		jobCount := 0
 		for _, rule := range e.rules {
-			wg.Add(1)
-			go func(rule fieldRule) {
-				defer wg.Done()
-				semaphore <- struct{}{}        // acquire
-				defer func() { <-semaphore }() // release
+			var value string
+			if rule.colIdx < len(cols) {
+				value = strings.TrimSpace(cols[rule.colIdx])
+			}
 
-				var cell string
-				if rule.colIdx < len(cols) {
-					cell = strings.TrimSpace(cols[rule.colIdx])
-				}
+			if value == "" && !rule.required {
+				continue
+			}
 
-				if rule.required && cell == "" {
-					errCh <- fmt.Errorf("row %d col %s (%s) is required",
-						rowNum, idxToCol(rule.colIdx), rule.header)
-					return
-				}
-
-				if cell == "" {
-					return
-				}
-
-				fv := rv.Field(rule.fieldIdx)
-				if !fv.CanSet() {
-					return
-				}
-
-				if err := setFieldValue(fv, cell, rule.layout); err != nil {
-					errCh <- fmt.Errorf("row %d col %s (%s): %w",
-						rowNum, idxToCol(rule.colIdx), rule.header, err)
-				}
-			}(rule)
+			jobs <- workItem{
+				rule:   rule,
+				value:  value,
+				rowNum: rowNum,
+				colIdx: rule.colIdx,
+			}
+			jobCount++
 		}
 
-		// Wait for all goroutines to finish
-		wg.Wait()
-		close(errCh)
-
-		// Check for any errors
-		for err := range errCh {
-			if err != nil {
-				return err // Return first error encountered
+		// Collect results
+		for i := 0; i < jobCount; i++ {
+			if err := <-results; err != nil {
+				return err
 			}
 		}
 
@@ -198,8 +232,50 @@ func (e *Excel[T]) getRows(out *[]T) error {
 		}
 	}
 
+	close(jobs)
+	wg.Wait()
+
 	e.IsNext = e.rows.Next()
 	return e.rows.Error()
+}
+
+// Optimized string cleaning
+func cleanNum(s string) string {
+	if !strings.Contains(s, ",") {
+		return strings.TrimSpace(s)
+	}
+
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf)
+
+	buf = buf[:0]
+	for i := 0; i < len(s); i++ {
+		if s[i] != ',' {
+			buf = append(buf, s[i])
+		}
+	}
+	return strings.TrimSpace(string(buf))
+}
+
+// Fast path converters
+func getOptimizedConverter(t reflect.Type) converter {
+	switch t.Kind() {
+	case reflect.String:
+		return func(s string) (interface{}, error) {
+			return s, nil
+		}
+	case reflect.Int64:
+		return func(s string) (interface{}, error) {
+			return strconv.ParseInt(s, 10, 64)
+		}
+	case reflect.Float64:
+		return func(s string) (interface{}, error) {
+			return strconv.ParseFloat(s, 64)
+		}
+	// Add more optimized converters as needed
+	default:
+		return nil
+	}
 }
 
 func buildRules(rt reflect.Type, colIndexByHeader map[string]int) ([]fieldRule, error) {
@@ -362,12 +438,6 @@ func parseAnyTime(s, layout string) (time.Time, error) {
 		return base.Add(time.Duration(sec) * time.Second), nil
 	}
 	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
-}
-
-func cleanNum(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, ",", "") // 1,234 -> 1234
-	return s
 }
 
 func colToIdx(col string) (int, bool) {
