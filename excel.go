@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -139,39 +140,65 @@ func (e *Excel[T]) getRows(out *[]T) error {
 		// new instance of T
 		rv := reflect.New(e.rt).Elem()
 
+		// Create error channel with buffer equal to number of rules
+		errCh := make(chan error, len(e.rules))
+		wg := sync.WaitGroup{}
+
+		// Limit concurrent goroutines
+		semaphore := make(chan struct{}, 10) // limit to 10 concurrent goroutines
+
 		for _, rule := range e.rules {
-			var cell string
-			if rule.colIdx < len(cols) {
-				cell = strings.TrimSpace(cols[rule.colIdx])
-			}
+			wg.Add(1)
+			go func(rule fieldRule) {
+				defer wg.Done()
+				semaphore <- struct{}{}        // acquire
+				defer func() { <-semaphore }() // release
 
-			if rule.required && cell == "" {
-				return fmt.Errorf("row %d col %s (%s) is required", rowNum, idxToCol(rule.colIdx), rule.header)
-			}
-			if cell == "" {
-				continue
-			}
+				var cell string
+				if rule.colIdx < len(cols) {
+					cell = strings.TrimSpace(cols[rule.colIdx])
+				}
 
-			fv := rv.Field(rule.fieldIdx)
-			if !fv.CanSet() {
-				continue
-			}
-			if err := setFieldValue(fv, cell, rule.layout); err != nil {
-				return fmt.Errorf("row %d col %s (%s): %w", rowNum, idxToCol(rule.colIdx), rule.header, err)
+				if rule.required && cell == "" {
+					errCh <- fmt.Errorf("row %d col %s (%s) is required",
+						rowNum, idxToCol(rule.colIdx), rule.header)
+					return
+				}
+
+				if cell == "" {
+					return
+				}
+
+				fv := rv.Field(rule.fieldIdx)
+				if !fv.CanSet() {
+					return
+				}
+
+				if err := setFieldValue(fv, cell, rule.layout); err != nil {
+					errCh <- fmt.Errorf("row %d col %s (%s): %w",
+						rowNum, idxToCol(rule.colIdx), rule.header, err)
+				}
+			}(rule)
+		}
+
+		// Wait for all goroutines to finish
+		wg.Wait()
+		close(errCh)
+
+		// Check for any errors
+		for err := range errCh {
+			if err != nil {
+				return err // Return first error encountered
 			}
 		}
+
 		*out = append(*out, rv.Interface().(T))
 		if e.opt.Limit > 0 && numberData >= e.opt.Limit {
 			break
 		}
 	}
 
-	if e.rows.Next() {
-		e.IsNext = true
-	} else {
-		e.IsNext = false
-	}
-
+	e.IsNext = e.rows.Next()
 	return e.rows.Error()
 }
 
