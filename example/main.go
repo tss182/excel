@@ -60,7 +60,11 @@ func main() {
 				break
 			}
 		}
-		return c.JSON(nil)
+		return c.JSON(fiber.Map{
+			"success": true,
+			//"data":    data,
+			"count": len(data),
+		})
 	})
 
 	app.Listen(":8888")
