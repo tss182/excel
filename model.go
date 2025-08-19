@@ -12,12 +12,13 @@ var defaultTimeLayouts = []string{
 
 type (
 	Excel[T any] struct {
-		file   *excelize.File
-		IsNext bool
-		rt     reflect.Type
-		rows   *excelize.Rows
-		rules  []fieldRule
-		opt    Opt
+		file      *excelize.File
+		IsNext    bool
+		rt        reflect.Type
+		rows      *excelize.Rows
+		rules     []fieldRule
+		opt       Opt
+		activeRow uint
 	}
 
 	Opt struct {

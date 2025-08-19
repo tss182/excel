@@ -12,6 +12,14 @@ import (
 	"unicode/utf8"
 )
 
+func defaultOptions() Opt {
+	return Opt{
+		HeaderRow:    1,
+		DataStartRow: 2,
+		Limit:        100,
+	}
+}
+
 func New[T any]() *Excel[T] {
 	return &Excel[T]{
 		file: excelize.NewFile(),
@@ -39,25 +47,19 @@ func (e *Excel[T]) Close() error {
 }
 
 func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
-	var headerRow, dataStartRow uint8 = 1, 2
-	var limit uint = 0
+	e.opt = defaultOptions()
 	if opts != nil {
 		for _, opt := range opts {
 			if opt.HeaderRow > 0 {
-				headerRow = opt.HeaderRow
+				e.opt.HeaderRow = opt.HeaderRow
 			}
 			if opt.DataStartRow > 0 {
-				dataStartRow = opt.DataStartRow
+				e.opt.DataStartRow = opt.DataStartRow
 			}
 			if opt.Limit > 0 {
-				limit = opt.Limit
+				e.opt.Limit = opt.Limit
 			}
 		}
-	}
-	e.opt = Opt{
-		HeaderRow:    headerRow,
-		DataStartRow: dataStartRow,
-		Limit:        limit,
 	}
 
 	if e.file == nil {
@@ -74,16 +76,20 @@ func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 		return fmt.Errorf("failed to read rows: %w", err)
 	}
 
-	for i := uint8(0); i < headerRow; i++ {
+	for i := uint8(0); i < e.opt.HeaderRow; i++ {
 		if !e.rows.Next() {
 			return fmt.Errorf("sheet %s in file excel: %w", sheetName, errors.New("empty sheet"))
 		}
+		e.activeRow = uint(i) + 1
 	}
 
+	fmt.Println("activeRow header:", e.activeRow)
 	header, err := e.rows.Columns()
 	if err != nil {
 		return fmt.Errorf("failed to read header: %w", err)
 	}
+
+	fmt.Println("header:", header)
 
 	colIdxHeader := make(map[string]int, len(header))
 	for i, h := range header {
@@ -105,6 +111,8 @@ func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 	if err != nil {
 		return err
 	}
+
+	e.rows.Next()
 
 	err = e.getRows(out)
 	if err != nil {
@@ -128,12 +136,16 @@ func (e *Excel[T]) Next(out *[]T) error {
 
 func (e *Excel[T]) getRows(out *[]T) error {
 	var numberData uint = 0
-	for e.rows.Next() {
+	for {
+		e.activeRow++
+		if e.activeRow < uint(e.opt.DataStartRow) {
+			e.rows.Next()
+			continue
+		}
 		numberData++
-		rowNum := numberData + uint(e.opt.DataStartRow) - 1
 		cols, err := e.rows.Columns()
 		if err != nil {
-			return fmt.Errorf("read row %d: %w", rowNum, err)
+			return fmt.Errorf("read row %d: %w", e.activeRow, err)
 		}
 
 		// new instance of T
@@ -146,7 +158,7 @@ func (e *Excel[T]) getRows(out *[]T) error {
 			}
 
 			if rule.required && cell == "" {
-				return fmt.Errorf("row %d col %s (%s) is required", rowNum, idxToCol(rule.colIdx), rule.header)
+				return fmt.Errorf("row %d col %s (%s) is required", e.activeRow, idxToCol(rule.colIdx), rule.header)
 			}
 			if cell == "" {
 				continue
@@ -157,20 +169,16 @@ func (e *Excel[T]) getRows(out *[]T) error {
 				continue
 			}
 			if err := setFieldValue(fv, cell, rule.layout); err != nil {
-				return fmt.Errorf("row %d col %s (%s): %w", rowNum, idxToCol(rule.colIdx), rule.header, err)
+				return fmt.Errorf("row %d col %s (%s): %w", e.activeRow, idxToCol(rule.colIdx), rule.header, err)
 			}
 		}
 		*out = append(*out, rv.Interface().(T))
-		if e.opt.Limit > 0 && numberData >= e.opt.Limit {
+		if (e.opt.Limit > 0 && numberData >= e.opt.Limit) || !e.rows.Next() {
 			break
 		}
 	}
 
-	if e.rows.Next() {
-		e.IsNext = true
-	} else {
-		e.IsNext = false
-	}
+	e.IsNext = e.rows.Next()
 
 	return e.rows.Error()
 }
@@ -188,7 +196,6 @@ func buildRules(rt reflect.Type, colIndexByHeader map[string]int) ([]fieldRule, 
 			for _, r := range sub {
 				r.fieldIdx = i // not correct for embedded; do deep set instead if needed
 			}
-			// (catatan: untuk kesederhanaan, contoh ini tidak mendukung embedded struct deep. Bisa ditambah kalau perlu.)
 			continue
 		}
 

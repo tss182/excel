@@ -8,8 +8,8 @@ import (
 
 type (
 	Data struct {
-		ID      int    `excel:"ID,required" json:"id"`
-		Name    string `excel:"Name,required" json:"name"`
+		ID      int    `excel:"ID" json:"id"`
+		Name    string `excel:"Name" json:"name"`
 		Phone   int    `excel:"Phone Number" json:"phone"`
 		Address string `excel:"Address" json:"address"`
 	}
@@ -31,9 +31,9 @@ func main() {
 		}
 
 		defer fe.Close()
-		var limit uint = 1000
+		var limit uint = 10
 
-		var data = make([]Data, 0, limit)
+		var data = make([]Data, 0, 1_000_000)
 
 		err = fe.Read(&data, "Sheet1", excel.Opt{
 			HeaderRow:    1,
@@ -49,6 +49,7 @@ func main() {
 		if !fe.IsNext {
 			return c.JSON(data)
 		}
+
 		for {
 			var temp = make([]Data, 0, limit)
 			err = fe.Next(&temp)
@@ -60,7 +61,7 @@ func main() {
 				break
 			}
 		}
-		return c.JSON(nil)
+		return c.JSON(data)
 	})
 
 	app.Listen(":8888")
