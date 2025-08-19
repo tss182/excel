@@ -6,7 +6,6 @@ import (
 	"github.com/xuri/excelize/v2"
 	"mime/multipart"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,9 +14,25 @@ import (
 )
 
 func New[T any]() *Excel[T] {
-	return &Excel[T]{
-		file: excelize.NewFile(),
+	var zero T
+	rt := reflect.TypeOf(zero)
+	if rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
 	}
+
+	excel := &Excel[T]{
+		file: excelize.NewFile(),
+		rt:   rt,
+	}
+
+	// Initialize instance pool for better memory management
+	excel.instancePool = &sync.Pool{
+		New: func() interface{} {
+			return reflect.New(rt).Elem()
+		},
+	}
+
+	return excel
 }
 
 func Open[T any](filename string) (*Excel[T], error) {
@@ -25,7 +40,26 @@ func Open[T any](filename string) (*Excel[T], error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
-	return &Excel[T]{file: file}, nil
+
+	var zero T
+	rt := reflect.TypeOf(zero)
+	if rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
+	}
+
+	excel := &Excel[T]{
+		file: file,
+		rt:   rt,
+	}
+
+	// Initialize instance pool for better memory management
+	excel.instancePool = &sync.Pool{
+		New: func() interface{} {
+			return reflect.New(rt).Elem()
+		},
+	}
+
+	return excel, nil
 }
 
 func OpenReader[T any](file multipart.File) (*Excel[T], error) {
@@ -33,7 +67,26 @@ func OpenReader[T any](file multipart.File) (*Excel[T], error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open reader: %w", err)
 	}
-	return &Excel[T]{file: f}, nil
+
+	var zero T
+	rt := reflect.TypeOf(zero)
+	if rt.Kind() == reflect.Pointer {
+		rt = rt.Elem()
+	}
+
+	excel := &Excel[T]{
+		file: f,
+		rt:   rt,
+	}
+
+	// Initialize instance pool for better memory management
+	excel.instancePool = &sync.Pool{
+		New: func() interface{} {
+			return reflect.New(rt).Elem()
+		},
+	}
+
+	return excel, nil
 }
 
 func (e *Excel[T]) Close() error {
@@ -43,6 +96,7 @@ func (e *Excel[T]) Close() error {
 func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 	var headerRow, dataStartRow uint8 = 1, 2
 	var limit uint = 0
+	var batchSize int = 1000 // default batch size
 	if opts != nil {
 		for _, opt := range opts {
 			if opt.HeaderRow > 0 {
@@ -54,13 +108,18 @@ func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 			if opt.Limit > 0 {
 				limit = opt.Limit
 			}
+			if opt.BatchSize > 0 {
+				batchSize = opt.BatchSize
+			}
 		}
 	}
 	e.opt = Opt{
 		HeaderRow:    headerRow,
 		DataStartRow: dataStartRow,
 		Limit:        limit,
+		BatchSize:    batchSize,
 	}
+	e.batchSize = batchSize
 
 	if e.file == nil {
 		return errors.New("file didn't set")
@@ -92,18 +151,29 @@ func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 		colIdxHeader[strings.TrimSpace(h)] = i
 	}
 
-	var zero T
-	rt := reflect.TypeOf(zero)
-	if rt.Kind() == reflect.Pointer {
-		rt = rt.Elem()
-	}
-	if rt.Kind() != reflect.Struct {
-		return errors.New("out must be a struct or *struct")
+	// Use cached type info if available, otherwise initialize
+	if e.rt == nil {
+		var zero T
+		rt := reflect.TypeOf(zero)
+		if rt.Kind() == reflect.Pointer {
+			rt = rt.Elem()
+		}
+		if rt.Kind() != reflect.Struct {
+			return errors.New("out must be a struct or *struct")
+		}
+		e.rt = rt
+
+		// Initialize instance pool if not already done
+		if e.instancePool == nil {
+			e.instancePool = &sync.Pool{
+				New: func() interface{} {
+					return reflect.New(rt).Elem()
+				},
+			}
+		}
 	}
 
-	e.rt = rt
-
-	e.rules, err = buildRules(rt, colIdxHeader)
+	e.rules, err = buildRules(e.rt, colIdxHeader)
 	if err != nil {
 		return err
 	}
@@ -129,157 +199,78 @@ func (e *Excel[T]) Next(out *[]T) error {
 }
 
 func (e *Excel[T]) getRows(out *[]T) error {
-	// Pre-allocate output slice
-	initialCap := 1000
-	if e.opt.Limit > 0 && uint(initialCap) > e.opt.Limit {
-		initialCap = int(e.opt.Limit)
-	}
-	*out = make([]T, 0, initialCap)
-
-	// Initialize worker pool
-	workers := e.opt.Workers
-	if workers <= 0 {
-		workers = runtime.NumCPU()
+	// Pre-allocate slice capacity if limit is known
+	if e.opt.Limit > 0 && cap(*out) < int(e.opt.Limit) {
+		newSlice := make([]T, len(*out), e.opt.Limit)
+		copy(newSlice, *out)
+		*out = newSlice
 	}
 
-	// Create work channels
-	type workItem struct {
-		rule   fieldRule
-		value  string
-		rowNum uint
-		colIdx int
-	}
-
-	jobs := make(chan workItem, workers*2)
-	results := make(chan error, workers*2)
-
-	// Start worker pool
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobs {
-				// Fast path processing
-				if job.rule.fastPath {
-					if _, err := job.rule.converter(job.value); err == nil {
-						results <- nil
-						continue
-					}
-				}
-
-				// Regular processing
-				if job.rule.required && job.value == "" {
-					results <- fmt.Errorf("row %d col %s (%s) is required",
-						job.rowNum, idxToCol(job.colIdx), job.rule.header)
-					continue
-				}
-
-				results <- nil
-			}
-		}()
-	}
-
-	// Process rows
 	var numberData uint = 0
-	buffer := bufferPool.Get().([]byte)
-	defer bufferPool.Put(buffer)
-
 	for e.rows.Next() {
 		numberData++
 		rowNum := numberData + uint(e.opt.DataStartRow) - 1
-
-		// Get row data efficiently
 		cols, err := e.rows.Columns()
 		if err != nil {
 			return fmt.Errorf("read row %d: %w", rowNum, err)
 		}
 
-		// Create new instance using cached type info
-		rv := reflect.New(e.rt).Elem()
+		// Get instance from pool for better memory reuse
+		rv := e.instancePool.Get().(reflect.Value)
 
-		// Process fields
-		jobCount := 0
-		for _, rule := range e.rules {
-			var value string
+		// Reset all fields to zero values for reuse
+		rv.Set(reflect.Zero(e.rt))
+
+		// Process each field rule with optimized access
+		for i := range e.rules {
+			rule := &e.rules[i] // Use pointer to avoid copying
+			var cell string
 			if rule.colIdx < len(cols) {
-				value = strings.TrimSpace(cols[rule.colIdx])
+				cell = strings.TrimSpace(cols[rule.colIdx])
 			}
 
-			if value == "" && !rule.required {
+			// Early validation for required fields
+			if rule.required && cell == "" {
+				// Return instance to pool before error
+				e.instancePool.Put(rv)
+				return fmt.Errorf("row %d col %s (%s) is required", rowNum, idxToCol(rule.colIdx), rule.header)
+			}
+			if cell == "" {
 				continue
 			}
 
-			jobs <- workItem{
-				rule:   rule,
-				value:  value,
-				rowNum: rowNum,
-				colIdx: rule.colIdx,
+			fv := rv.Field(rule.fieldIdx)
+			if !fv.CanSet() {
+				continue
 			}
-			jobCount++
-		}
 
-		// Collect results
-		for i := 0; i < jobCount; i++ {
-			if err := <-results; err != nil {
-				return err
+			// Use optimized field setting with cached type info
+			if err := setFieldValueOptimized(fv, cell, rule); err != nil {
+				// Return instance to pool before error
+				e.instancePool.Put(rv)
+				return fmt.Errorf("row %d col %s (%s): %w", rowNum, idxToCol(rule.colIdx), rule.header, err)
 			}
 		}
 
 		*out = append(*out, rv.Interface().(T))
+
+		// Return instance to pool for reuse
+		e.instancePool.Put(rv)
+
 		if e.opt.Limit > 0 && numberData >= e.opt.Limit {
 			break
 		}
 	}
 
-	close(jobs)
-	wg.Wait()
-
 	e.IsNext = e.rows.Next()
+
 	return e.rows.Error()
 }
 
-// Optimized string cleaning
-func cleanNum(s string) string {
-	if !strings.Contains(s, ",") {
-		return strings.TrimSpace(s)
-	}
-
-	buf := bufferPool.Get().([]byte)
-	defer bufferPool.Put(buf)
-
-	buf = buf[:0]
-	for i := 0; i < len(s); i++ {
-		if s[i] != ',' {
-			buf = append(buf, s[i])
-		}
-	}
-	return strings.TrimSpace(string(buf))
-}
-
-// Fast path converters
-func getOptimizedConverter(t reflect.Type) converter {
-	switch t.Kind() {
-	case reflect.String:
-		return func(s string) (interface{}, error) {
-			return s, nil
-		}
-	case reflect.Int64:
-		return func(s string) (interface{}, error) {
-			return strconv.ParseInt(s, 10, 64)
-		}
-	case reflect.Float64:
-		return func(s string) (interface{}, error) {
-			return strconv.ParseFloat(s, 64)
-		}
-	// Add more optimized converters as needed
-	default:
-		return nil
-	}
-}
-
 func buildRules(rt reflect.Type, colIndexByHeader map[string]int) ([]fieldRule, error) {
-	var rules []fieldRule
+	// Pre-allocate rules slice with estimated capacity
+	rules := make([]fieldRule, 0, rt.NumField())
+
 	for i := 0; i < rt.NumField(); i++ {
 		sf := rt.Field(i)
 		if sf.Anonymous {
@@ -291,7 +282,7 @@ func buildRules(rt reflect.Type, colIndexByHeader map[string]int) ([]fieldRule, 
 			for _, r := range sub {
 				r.fieldIdx = i // not correct for embedded; do deep set instead if needed
 			}
-			// (catatan: untuk kesederhanaan, contoh ini tidak mendukung embedded struct deep. Bisa ditambah kalau perlu.)
+			rules = append(rules, sub...)
 			continue
 		}
 
@@ -316,12 +307,23 @@ func buildRules(rt reflect.Type, colIndexByHeader map[string]int) ([]fieldRule, 
 		default:
 			return nil, fmt.Errorf("excel tag on field %s must specify header or col", sf.Name)
 		}
+
+		// Cache type information for faster field setting
+		fieldType := sf.Type
+		isPointer := fieldType.Kind() == reflect.Pointer
+		if isPointer {
+			fieldType = fieldType.Elem()
+		}
+
 		rules = append(rules, fieldRule{
-			fieldIdx: i,
-			colIdx:   colIdx,
-			header:   spec.header,
-			required: spec.required,
-			layout:   spec.layout,
+			fieldIdx:  i,
+			colIdx:    colIdx,
+			header:    spec.header,
+			required:  spec.required,
+			layout:    spec.layout,
+			fieldType: fieldType,
+			isPointer: isPointer,
+			kindCache: fieldType.Kind(),
 		})
 	}
 	return rules, nil
@@ -359,6 +361,185 @@ func parseTag(s string) tagSpec {
 	return ts
 }
 
+// setFieldValueOptimized uses cached type information for faster field setting
+func setFieldValueOptimized(fv reflect.Value, raw string, rule *fieldRule) (err error) {
+	if rule == nil {
+		return fmt.Errorf("field rule cannot be nil")
+	}
+
+	// Protect against panics in reflection operations
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in field value setting: %v", r)
+		}
+	}()
+
+	if !fv.IsValid() {
+		return fmt.Errorf("invalid reflect value")
+	}
+
+	if rule.isPointer {
+		// Handle pointer types
+		if rule.fieldType == nil {
+			return fmt.Errorf("field type cannot be nil for pointer type")
+		}
+		elem := reflect.New(rule.fieldType)
+		if err := setFieldValueOptimizedDirect(elem.Elem(), raw, rule.kindCache, rule.layout); err != nil {
+			return fmt.Errorf("failed to set pointer field value: %w", err)
+		}
+		if !fv.CanSet() {
+			return fmt.Errorf("cannot set field value")
+		}
+		fv.Set(elem)
+		return nil
+	}
+
+	return setFieldValueOptimizedDirect(fv, raw, rule.kindCache, rule.layout)
+}
+
+// setFieldValueOptimizedDirect with improved error handling
+//func setFieldValueOptimizedDirect(fv reflect.Value, raw string, kind reflect.Kind, layout string) (err error) {
+//	// Protect against panics
+//	defer func() {
+//		if r := recover(); r != nil {
+//			err = fmt.Errorf("panic in direct field value setting: %v", r)
+//		}
+//	}()
+//
+//	if !fv.IsValid() || !fv.CanSet() {
+//		return fmt.Errorf("invalid or unsettable field")
+//	}
+//
+//	// Validate kind
+//	if fv.Kind() != kind {
+//		return fmt.Errorf("kind mismatch: expected %v, got %v", kind, fv.Kind())
+//	}
+//
+//	// Clean input string
+//	raw = strings.TrimSpace(raw)
+//	if raw == "" && kind != reflect.String {
+//		return nil // Skip empty values for non-string fields
+//	}
+//
+//	switch kind {
+//	case reflect.String:
+//		fv.SetString(raw)
+//	case reflect.Bool:
+//		// Optimized boolean parsing
+//		switch strings.ToLower(raw) {
+//		case "1", "true", "yes":
+//			fv.SetBool(true)
+//		case "0", "false", "no":
+//			fv.SetBool(false)
+//		default:
+//			return fmt.Errorf("invalid boolean value: %s", raw)
+//		}
+//	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+//		i, err := strconv.ParseInt(cleanNumOptimized(raw), 10, 64)
+//		if err != nil {
+//			return fmt.Errorf("failed to parse int: %w", err)
+//		}
+//		if !fv.OverflowInt(i) {
+//			fv.SetInt(i)
+//		} else {
+//			return fmt.Errorf("integer overflow for value: %d", i)
+//		}
+//	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+//		u, err := strconv.ParseUint(cleanNumOptimized(raw), 10, 64)
+//		if err != nil {
+//			return fmt.Errorf("failed to parse uint: %w", err)
+//		}
+//		if !fv.OverflowUint(u) {
+//			fv.SetUint(u)
+//		} else {
+//			return fmt.Errorf("unsigned integer overflow for value: %d", u)
+//		}
+//	case reflect.Float32, reflect.Float64:
+//		fl, err := strconv.ParseFloat(strings.ReplaceAll(raw, ",", "."), 64)
+//		if err != nil {
+//			return fmt.Errorf("failed to parse float: %w", err)
+//		}
+//		if !fv.OverflowFloat(fl) {
+//			fv.SetFloat(fl)
+//		} else {
+//			return fmt.Errorf("float overflow for value: %f", fl)
+//		}
+//	case reflect.Struct:
+//		if fv.Type() == reflect.TypeOf(time.Time{}) {
+//			t, err := parseAnyTimeOptimized(raw, layout)
+//			if err != nil {
+//				return fmt.Errorf("failed to parse time: %w", err)
+//			}
+//			fv.Set(reflect.ValueOf(t))
+//			return nil
+//		}
+//		return fmt.Errorf("unsupported struct type: %s", fv.Type())
+//	default:
+//		return fmt.Errorf("unsupported kind: %s", kind)
+//	}
+//
+//	return nil
+//}
+
+// setFieldValueOptimizedDirect sets field value directly using cached kind
+func setFieldValueOptimizedDirect(fv reflect.Value, raw string, kind reflect.Kind, layout string) error {
+	switch kind {
+	case reflect.String:
+		fv.SetString(raw)
+	case reflect.Bool:
+		// Optimized boolean parsing
+		switch raw {
+		case "1", "true", "TRUE", "True", "yes", "YES", "Yes":
+			fv.SetBool(true)
+		case "0", "false", "FALSE", "False", "no", "NO", "No":
+			fv.SetBool(false)
+		default:
+			b, err := strconv.ParseBool(strings.ToLower(raw))
+			if err != nil {
+				return err
+			}
+			fv.SetBool(b)
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i, err := strconv.ParseInt(cleanNumOptimized(raw), 10, 64)
+		if err != nil {
+			return err
+		}
+		fv.SetInt(i)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		u, err := strconv.ParseUint(cleanNumOptimized(raw), 10, 64)
+		if err != nil {
+			return err
+		}
+		fv.SetUint(u)
+	case reflect.Float32, reflect.Float64:
+		// Optimized float parsing
+		cleanRaw := raw
+		if strings.Contains(raw, ",") {
+			cleanRaw = strings.ReplaceAll(raw, ",", ".")
+		}
+		fl, err := strconv.ParseFloat(cleanRaw, 64)
+		if err != nil {
+			return err
+		}
+		fv.SetFloat(fl)
+	case reflect.Struct:
+		if fv.Type() == reflect.TypeOf(time.Time{}) {
+			t, err := parseAnyTimeOptimized(raw, layout)
+			if err != nil {
+				return err
+			}
+			fv.Set(reflect.ValueOf(t))
+			return nil
+		}
+		return fmt.Errorf("unsupported struct type: %s", fv.Type())
+	default:
+		return fmt.Errorf("unsupported kind: %s", kind)
+	}
+	return nil
+}
+
+// Keep original function for backward compatibility
 func setFieldValue(fv reflect.Value, raw string, layout string) error {
 	switch fv.Kind() {
 	case reflect.String:
@@ -378,7 +559,6 @@ func setFieldValue(fv reflect.Value, raw string, layout string) error {
 		}
 		fv.SetBool(b)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		// int64 also covers time.Duration if needed (could be extended).
 		i, err := strconv.ParseInt(cleanNum(raw), 10, 64)
 		if err != nil {
 			return err
@@ -407,7 +587,6 @@ func setFieldValue(fv reflect.Value, raw string, layout string) error {
 		}
 		return fmt.Errorf("unsupported struct type: %s", fv.Type())
 	case reflect.Pointer:
-		// allocate and set
 		elem := reflect.New(fv.Type().Elem())
 		if err := setFieldValue(elem.Elem(), raw, layout); err != nil {
 			return err
@@ -437,6 +616,85 @@ func parseAnyTime(s, layout string) (time.Time, error) {
 		sec := int64(f * 86400.0)
 		return base.Add(time.Duration(sec) * time.Second), nil
 	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
+}
+
+// cleanNumOptimized provides faster number cleaning with fewer allocations
+func cleanNumOptimized(s string) string {
+	if s == "" {
+		return s
+	}
+
+	// Quick check if cleaning is needed
+	needsCleaning := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' {
+			needsCleaning = true
+			break
+		}
+	}
+
+	if !needsCleaning {
+		return s
+	}
+
+	// Use builder for efficient string construction
+	var builder strings.Builder
+	builder.Grow(len(s)) // Pre-allocate capacity
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != ',' {
+			builder.WriteByte(c)
+		}
+	}
+
+	return builder.String()
+}
+
+// Keep original function for backward compatibility
+func cleanNum(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, ",", "") // 1,234 -> 1234
+	return s
+}
+
+// parseAnyTimeOptimized provides faster time parsing with caching
+func parseAnyTimeOptimized(s, layout string) (time.Time, error) {
+	// Try custom layout first if provided
+	if layout != "" {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+
+	// Try common formats first for better performance
+	commonLayouts := []string{
+		"2006-01-02", "02/01/2006", "2006-01-02 15:04:05",
+	}
+
+	for _, l := range commonLayouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		}
+	}
+
+	// Fallback to all default layouts
+	for _, l := range defaultTimeLayouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		}
+	}
+
+	// Try excel serial number (e.g., "45123.0")
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		// Excel serial date: days since 1899-12-30
+		base := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+		sec := int64(f * 86400.0)
+		return base.Add(time.Duration(sec) * time.Second), nil
+	}
+
 	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
 }
 
