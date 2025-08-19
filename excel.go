@@ -62,6 +62,11 @@ func (e *Excel[T]) Read(out *[]T, sheetName string, opts ...Opt) error {
 		}
 	}
 
+	//set default sheet
+	if sheetName == "" {
+		sheetName = e.file.GetSheetName(e.file.GetActiveSheetIndex())
+	}
+
 	if e.file == nil {
 		return errors.New("file didn't set")
 	}

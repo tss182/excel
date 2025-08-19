@@ -31,7 +31,7 @@ func main() {
 		}
 
 		defer fe.Close()
-		var limit uint = 10
+		var limit uint = 1_0000
 
 		var data = make([]Data, 0, 1_000_000)
 
